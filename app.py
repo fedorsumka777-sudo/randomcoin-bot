@@ -21,7 +21,7 @@ def send_message(chat_id, text):
 
 @app.route("/", methods=["GET"])
 def home():
-    return "RandomCoin bot is running ✅", 200
+    return "RandomCoin bot is running", 200
 
 
 @app.route("/telegram-webhook", methods=["POST"])
@@ -44,7 +44,11 @@ def telegram_webhook():
         )
 
     elif text == "/ping":
-        send_message(chat_id, "🏓 Pong! RandomCoin Bot працює ✅")
+        send_message(
+            chat_id,
+            "🏓 Pong!\n\n"
+            "🎁 RandomCoin Bot працює нормально."
+        )
 
     return jsonify({"ok": True})
 
