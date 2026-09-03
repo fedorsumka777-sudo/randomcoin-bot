@@ -19,7 +19,7 @@ app = Flask(__name__)
 # RANDOMCOIN BOT
 # =========================================================
 
-APP_VERSION = "randomcoin-2026-09-03-private-giveaways-v3"
+APP_VERSION = "randomcoin-2026-09-03-private-giveaways-v4"
 
 BOT_TOKEN = os.getenv("RANDOM_BOT_TOKEN")
 ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID")
@@ -59,20 +59,12 @@ REQUIRED_TELEGRAM = [
     },
 ]
 
-# Ці умови бот показує як рекомендації.
-# Telegram Bot API не дозволяє надійно перевірити, чи користувач
-# «підписаний» на іншого бота. Facebook-група потребує окремої
-# інтеграції Meta, якої зараз немає.
-RECOMMENDED_LINKS = [
-    {
-        "title": "🤖 Запустити NumizmatCoin_bot",
-        "url": "https://t.me/NumizmatCoin_bot",
-    },
-    {
-        "title": "👥 Facebook-група «Східний Аукціон»",
-        "url": "https://www.facebook.com/groups/1278662330184542",
-    },
-]
+# Facebook-група показується ОКРЕМО як рекомендація.
+# Її членство бот автоматично не перевіряє.
+FACEBOOK_RECOMMENDATION = {
+    "title": "👥 Facebook-група «Східний Аукціон»",
+    "url": "https://www.facebook.com/groups/1278662330184542",
+}
 
 # Чернетки створення розіграшу зберігаються в RAM.
 # Опубліковані розіграші та учасники зберігаються в PostgreSQL.
@@ -892,6 +884,7 @@ def preview_keyboard():
 def join_keyboard(giveaway_id):
     rows = []
 
+    # Обов'язкові Telegram-ресурси — їх бот перевіряє автоматично.
     for resource in REQUIRED_TELEGRAM:
         rows.append(
             [
@@ -902,20 +895,20 @@ def join_keyboard(giveaway_id):
             ]
         )
 
-    for resource in RECOMMENDED_LINKS:
-        rows.append(
-            [
-                {
-                    "text": resource["title"],
-                    "url": resource["url"],
-                }
-            ]
-        )
+    # Facebook — окрема рекомендація, без автоматичної перевірки.
+    rows.append(
+        [
+            {
+                "text": "💡 Рекомендуємо: Facebook «Східний Аукціон»",
+                "url": FACEBOOK_RECOMMENDATION["url"],
+            }
+        ]
+    )
 
     rows.append(
         [
             {
-                "text": "✅ Перевірити та взяти участь",
+                "text": "✅ Перевірити підписки та взяти участь",
                 "callback_data": f"join:{giveaway_id}",
             }
         ]
@@ -1292,13 +1285,14 @@ def show_join_screen(chat_id, giveaway_id):
         chat_id,
         "🎁 <b>УЧАСТЬ У РОЗІГРАШІ</b>\n\n"
         f"🏷 <b>{esc(giveaway['title'])}</b>\n\n"
-        "📢 <b>Обов'язково:</b>\n"
+        "📢 <b>ОБОВ'ЯЗКОВІ УМОВИ:</b>\n"
         "✅ бути учасником Telegram-групи «Східний Аукціон»\n"
         "✅ бути підписаним на Telegram-канал East Auction\n\n"
-        "💡 <b>Рекомендуємо:</b>\n"
-        "🤖 запустити NumizmatCoin_bot\n"
-        "👥 вступити до Facebook-групи «Східний Аукціон»\n\n"
-        "Після виконання умов натисніть кнопку перевірки.",
+        "🤖 <b>Бот автоматично перевірить ОБИДВІ Telegram-підписки.</b>\n\n"
+        "💡 <b>ОКРЕМО РЕКОМЕНДУЄМО:</b>\n"
+        "👥 Facebook-групу «Східний Аукціон»\n"
+        "Ця рекомендація не впливає на допуск до розіграшу.\n\n"
+        "Після виконання обов'язкових Telegram-умов натисніть кнопку перевірки.",
         join_keyboard(giveaway_id),
     )
 
@@ -1925,11 +1919,12 @@ def handle_message(message):
             "📸 Від 1 до 10 фото\n"
             "🏆 Від 1 до 15 призових місць\n"
             "👥 Кількість учасників — без верхньої межі\n"
-            "📢 Перевірка Telegram-підписок\n"
+            "📢 Автоматична перевірка Telegram-групи та Telegram-каналу\n"
             "🚀 Додаткові шанси ×2 / ×3\n"
             "⏰ Завершення за часом або кількістю учасників\n"
             "🎲 Випадковий вибір унікальних переможців\n"
-            "📩 Автоматичне повідомлення організатора та переможців.",
+            "📩 Автоматичне повідомлення організатора та переможців\n"
+"💡 Facebook-група «Східний Аукціон» рекомендується окремо.",
         )
         return
 
