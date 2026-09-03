@@ -19,7 +19,7 @@ app = Flask(__name__)
 # RANDOMCOIN BOT
 # =========================================================
 
-APP_VERSION = "randomcoin-2026-09-03-clean-v1"
+APP_VERSION = "randomcoin-2026-09-03-clean-v2"
 
 BOT_TOKEN = os.getenv("RANDOM_BOT_TOKEN")
 ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID")
@@ -725,29 +725,19 @@ def persistent_keyboard(user_id):
 def show_main_menu(chat_id, user_id):
     if is_admin(user_id):
         text = (
-            "🎁 <b>RandomCoin Bot</b>\n\n"
-            "Панель керування розіграшами.\n\n"
-            "Оберіть потрібну дію 👇"
+            "🎁 <b>RandomCoin Bot</b>\n"
+            "Панель керування розіграшами. Оберіть дію 👇"
         )
-        inline = admin_inline_menu()
     else:
         text = (
-            "🎁 <b>RandomCoin Bot</b>\n\n"
-            "Тут ви можете брати участь у розіграшах.\n\n"
-            "Оберіть дію 👇"
+            "🎁 <b>RandomCoin Bot</b>\n"
+            "Оберіть активний розіграш або відкрийте допомогу 👇"
         )
-        inline = participant_inline_menu()
 
+    # Одне компактне повідомлення + постійна нижня клавіатура.
     send_message(
         chat_id,
         text,
-        inline,
-    )
-
-    # Постійне нижнє меню в приватному чаті.
-    send_message(
-        chat_id,
-        "⬇️ <b>Меню бота увімкнено.</b>",
         persistent_keyboard(user_id),
     )
 
@@ -937,6 +927,7 @@ def new_draft(user_id):
         "title": "",
         "description": "",
         "photos": [],
+        "photo_ack_sent": False,
         "winners": 1,
         "boost_enabled": False,
         "boost_multiplier": 1,
@@ -987,19 +978,15 @@ def build_preview(draft):
     )
 
     return (
-        "🎁 <b>ПЕРЕВІРКА РОЗІГРАШУ</b>\n\n"
-        f"🏷 <b>Назва:</b>\n{esc(draft['title'])}\n\n"
-        f"📝 <b>Опис:</b>\n{esc(draft['description'])}\n\n"
-        f"📸 <b>Фото:</b> {len(draft['photos'])}\n"
-        f"🏆 <b>Переможців:</b> {draft['winners']}\n"
-        f"🚀 <b>Буст:</b> {boost_text}\n"
-        f"🏁 <b>Завершення:</b> {esc(draft_end_text(draft))}\n\n"
-        "📢 <b>Обов'язкові Telegram-підписки:</b>\n"
-        "✅ Група «Східний Аукціон» — @EastAuction\n"
-        "✅ Канал East Auction — @East_Auction\n\n"
-        "💡 <b>Рекомендації:</b>\n"
-        "🤖 запустити @NumizmatCoin_bot\n"
-        "👥 вступити до Facebook-групи «Східний Аукціон»\n\n"
+        "🎁 <b>ПЕРЕВІРКА РОЗІГРАШУ</b>\n"
+        f"🏷 <b>Назва:</b> {esc(draft['title'])}\n"
+        f"📝 <b>Опис:</b> {esc(draft['description'])}\n"
+        f"📸 Фото: <b>{len(draft['photos'])}</b> | "
+        f"🏆 Переможців: <b>{draft['winners']}</b>\n"
+        f"🚀 Буст: <b>{boost_text}</b>\n"
+        f"🏁 Завершення: <b>{esc(draft_end_text(draft))}</b>\n"
+        "📢 <b>Обов'язково:</b> @EastAuction, @East_Auction\n"
+        "💡 <b>Рекомендовано:</b> @NumizmatCoin_bot та Facebook-група\n"
         "⚠️ Перевірте дані перед запуском."
     )
 
@@ -1012,20 +999,15 @@ def build_public_text(giveaway_id, draft):
     )
 
     return (
-        "🎁 <b>НОВИЙ РОЗІГРАШ</b> 🎁\n\n"
-        f"🆔 <b>№{giveaway_id}</b>\n"
-        f"🏷 <b>{esc(draft['title'])}</b>\n\n"
-        f"📝 {esc(draft['description'])}\n\n"
-        f"🏆 Переможців: <b>{draft['winners']}</b>\n"
+        "🎁 <b>НОВИЙ РОЗІГРАШ</b> 🎁\n"
+        f"🆔 №{giveaway_id} | 🏷 <b>{esc(draft['title'])}</b>\n"
+        f"📝 {esc(draft['description'])}\n"
+        f"🏆 Переможців: <b>{draft['winners']}</b> | "
         f"🚀 Буст: <b>{boost_text}</b>\n"
-        f"🏁 Завершення: <b>{esc(draft_end_text(draft))}</b>\n\n"
-        "📢 <b>Обов'язкові умови:</b>\n"
-        "✅ учасник Telegram-групи «Східний Аукціон»\n"
-        "✅ підписка на Telegram-канал East Auction\n\n"
-        "💡 <b>Рекомендуємо:</b>\n"
-        "🤖 запустити @NumizmatCoin_bot\n"
-        "👥 вступити до Facebook-групи «Східний Аукціон»\n\n"
-        "👇 Для участі натисніть кнопку нижче."
+        f"🏁 Завершення: <b>{esc(draft_end_text(draft))}</b>\n"
+        "📢 <b>Обов'язково:</b> @EastAuction та @East_Auction\n"
+        "💡 <b>Рекомендовано:</b> @NumizmatCoin_bot і Facebook-група\n"
+        "👇 Натисніть «🎁 Взяти участь»."
     )
 
 
@@ -1098,14 +1080,10 @@ def handle_draft_message(message, user_id, draft):
 
         send_message(
             chat_id,
-            "✅ Опис збережено.\n\n"
-            "Крок 3 із 6\n\n"
-            "📸 Надішліть від <b>1 до 10 фото</b>.\n\n"
-            "Можна надіслати всі фото одним альбомом або кількома "
-            "повідомленнями.\n\n"
-            "🔕 Бот не відповідає після кожного фото.\n"
-            "Після завантаження <b>всіх</b> фото натисніть "
-            "<b>«✅ Фото завантажені»</b>.",
+            "✅ Опис збережено.\n"
+            "📸 Крок 3 із 6: додайте від <b>1 до 10 фото</b>.\n"
+            "Можна надіслати альбомом або кількома повідомленнями. "
+            "Після всіх фото натисніть <b>«✅ Фото завантажені»</b>.",
             photos_keyboard(),
         )
         return
@@ -1124,7 +1102,17 @@ def handle_draft_message(message, user_id, draft):
         if file_id not in draft["photos"]:
             draft["photos"].append(file_id)
 
-        # Навмисно не надсилаємо відповідь на кожне фото.
+        # Одне підтвердження після першого отриманого фото.
+        # Наступні фото накопичуються без додаткових повідомлень.
+        if not draft.get("photo_ack_sent"):
+            draft["photo_ack_sent"] = True
+            send_message(
+                chat_id,
+                "✅ Фото отримано. Додайте решту фото, якщо потрібно, "
+                "а після завершення натисніть «✅ Фото завантажені».",
+                photos_keyboard(),
+            )
+
         return
 
     if draft["step"] == "end_time":
@@ -1570,15 +1558,13 @@ def finish_giveaway(giveaway_id):
         winners_text = "😔 Немає зареєстрованих учасників."
 
     final_text = (
-        "🎊🎊🎊 <b>РОЗІГРАШ ЗАВЕРШЕНО!</b> 🎊🎊🎊\n\n"
-        f"🎁 <b>{esc(giveaway['title'])}</b>\n\n"
-        f"👥 Учасників: <b>{len(participants)}</b>\n"
-        f"🏆 Переможців: <b>{len(winners)}</b>\n\n"
-        "🥳 <b>НАШІ ПЕРЕМОЖЦІ:</b>\n"
-        f"{winners_text}\n\n"
-        "✨ Вітаємо переможців!\n"
-        "🤝 Дякуємо всім за участь!\n\n"
-        "🎁 До зустрічі в наступних розіграшах!"
+        "🎊 <b>РОЗІГРАШ ЗАВЕРШЕНО!</b>\n"
+        f"🎁 <b>{esc(giveaway['title'])}</b>\n"
+        f"👥 Учасників: <b>{len(participants)}</b> | "
+        f"🏆 Переможців: <b>{len(winners)}</b>\n"
+        "🥳 <b>ПЕРЕМОЖЦІ:</b>\n"
+        f"{winners_text}\n"
+        "✨ Вітаємо переможців! Дякуємо всім за участь 🤝"
     )
 
     group_chat_id = as_int(RANDOM_PUBLISH_CHAT_ID)
@@ -1828,9 +1814,7 @@ def handle_message(message):
     if text == "/ping":
         send_message(
             chat_id,
-            "🏓 <b>Pong!</b>\n\n"
-            "🎁 RandomCoin Bot працює нормально ✅\n"
-            f"🔧 <code>{APP_VERSION}</code>",
+            "🏓 <b>Pong!</b>\n🎁 RandomCoin Bot працює нормально ✅",
         )
         return
 
@@ -2325,12 +2309,10 @@ def handle_callback(callback):
 
             send_message(
                 chat_id,
-                "❌ <b>Не вдалося запустити розіграш.</b>\n\n"
-                "Перевірте:\n"
-                "• DATABASE_URL\n"
-                "• RANDOM_PUBLISH_CHAT_ID\n"
-                "• чи RandomCoin Bot доданий адміністратором у групу\n"
-                "• чи має він право надсилати повідомлення та фото\n\n"
+                "❌ <b>Не вдалося запустити розіграш.</b>\n"
+                "Перевірте DATABASE_URL, RANDOM_PUBLISH_CHAT_ID, "
+                "додавання бота адміністратором у групу та право "
+                "надсилати повідомлення/фото.\n"
                 f"🔧 <code>{APP_VERSION}</code>",
             )
             return
@@ -2340,20 +2322,12 @@ def handle_callback(callback):
 
         send_message(
             chat_id,
-            "🎉 <b>РОЗІГРАШ ЗАПУЩЕНО!</b>\n\n"
-            f"🆔 №{giveaway_id}\n"
-            f"🏷 {esc(launched['title'])}\n"
-            f"📸 Фото: {len(launched['photos'])}\n"
-            f"🏆 Переможців: {launched['winners']}\n\n"
-            "✅ Збережено в PostgreSQL.\n"
-            "✅ Опубліковано в Telegram-групі.\n"
-            "✅ Кнопка «🎁 Взяти участь» активна.\n\n"
-            f"🔧 <code>{APP_VERSION}</code>",
-        )
-
-        show_main_menu(
-            chat_id,
-            user_id,
+            "🎉 <b>РОЗІГРАШ ЗАПУЩЕНО!</b>\n"
+            f"🆔 №{giveaway_id} | 🏷 {esc(launched['title'])}\n"
+            f"📸 Фото: {len(launched['photos'])} | "
+            f"🏆 Переможців: {launched['winners']}\n"
+            "✅ Збережено в PostgreSQL і опубліковано в групі.\n"
+            "🎁 Кнопка «Взяти участь» активна.",
         )
         return
 
