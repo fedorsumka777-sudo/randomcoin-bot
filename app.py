@@ -19,7 +19,7 @@ app = Flask(__name__)
 # RANDOMCOIN BOT
 # =========================================================
 
-APP_VERSION = "randomcoin-2026-09-03-clean-v2"
+APP_VERSION = "randomcoin-2026-09-03-private-giveaways-v3"
 
 BOT_TOKEN = os.getenv("RANDOM_BOT_TOKEN")
 ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID")
@@ -119,6 +119,41 @@ def is_private_callback(callback):
 
 def thread_id():
     return as_int(RANDOM_PUBLISH_THREAD_ID)
+
+
+def user_label(user):
+    username = user.get("username")
+    first_name = (user.get("first_name") or "").strip()
+    last_name = (user.get("last_name") or "").strip()
+    full_name = " ".join(x for x in (first_name, last_name) if x).strip()
+
+    if username and full_name:
+        return f"{esc(full_name)} (@{esc(username)})"
+    if username:
+        return f"@{esc(username)}"
+    if full_name:
+        return esc(full_name)
+    return f"ID <code>{user.get('id')}</code>"
+
+
+def notify_admin_usage(user, action="відкрив бота"):
+    """Повідомляє власника, хто і коли користувався ботом."""
+    admin_id = as_int(ADMIN_TELEGRAM_ID)
+    user_id = as_int(user.get("id"))
+
+    # Власні дії адміністратора не дублюємо йому ж.
+    if not admin_id or not user_id or user_id == admin_id:
+        return
+
+    now = datetime.now(KYIV).strftime("%d.%m.%Y %H:%M:%S")
+    send_message(
+        admin_id,
+        "👀 <b>ВИКОРИСТАННЯ RANDOMCOIN BOT</b>\n\n"
+        f"👤 {user_label(user)}\n"
+        f"🆔 <code>{user_id}</code>\n"
+        f"🕒 {now}\n"
+        f"📌 Дія: {esc(action)}",
+    )
 
 
 # =========================================================
@@ -323,6 +358,30 @@ def active_giveaways(limit=20):
                 (limit,),
             )
             return cur.fetchall()
+
+def my_giveaways(user_id, limit=30):
+    with db_connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    g.*,
+                    (
+                        SELECT COUNT(*)
+                        FROM randomcoin_participants p
+                        WHERE p.giveaway_id=g.id
+                    ) AS participants_count
+                FROM randomcoin_giveaways g
+                WHERE g.created_by=%s
+                ORDER BY
+                    CASE WHEN g.status='active' THEN 0 ELSE 1 END,
+                    g.id DESC
+                LIMIT %s
+                """,
+                (user_id, limit),
+            )
+            return cur.fetchall()
+
 
 
 def finished_giveaways(limit=20):
@@ -548,53 +607,34 @@ def answer_callback(callback_id, text=None, show_alert=False):
 
 
 def configure_commands():
-    default_commands = [
+    commands = [
         {"command": "start", "description": "Запустити бота"},
-        {"command": "menu", "description": "Відкрити меню"},
-        {"command": "giveaways", "description": "Активні розіграші"},
+        {"command": "menu", "description": "Відкрити головне меню"},
+        {"command": "create", "description": "Подати оголошення"},
+        {"command": "giveaways", "description": "Активні оголошення"},
+        {"command": "my", "description": "Мої оголошення"},
         {"command": "help", "description": "Допомога"},
-        {"command": "ping", "description": "Перевірка роботи"},
     ]
 
     telegram_request(
         "setMyCommands",
         {
-            "commands": default_commands,
+            "commands": commands,
+            "scope": {"type": "all_private_chats"},
         },
     )
 
-    # Для приватного чату адміністратора додаємо службові команди.
-    admin_id = as_int(ADMIN_TELEGRAM_ID)
-
-    if admin_id:
-        admin_commands = default_commands + [
-            {"command": "create", "description": "Створити розіграш"},
-            {"command": "active", "description": "Активні розіграші"},
-            {"command": "finished", "description": "Завершені розіграші"},
-            {"command": "participants", "description": "Учасники розіграшу"},
-            {"command": "boost", "description": "Надати буст учаснику"},
-            {"command": "finish", "description": "Завершити розіграш"},
-            {"command": "cancel", "description": "Скасувати чернетку"},
-            {"command": "status", "description": "Статус налаштувань"},
-        ]
-
-        telegram_request(
-            "setMyCommands",
-            {
-                "commands": admin_commands,
-                "scope": {
-                    "type": "chat",
-                    "chat_id": admin_id,
-                },
-            },
-        )
+    telegram_request(
+        "deleteMyCommands",
+        {
+            "scope": {"type": "all_group_chats"},
+        },
+    )
 
     telegram_request(
         "setChatMenuButton",
         {
-            "menu_button": {
-                "type": "commands",
-            }
+            "menu_button": {"type": "commands"},
         },
     )
 
@@ -652,26 +692,24 @@ def check_required_subscriptions(user_id):
 # MENUS
 # =========================================================
 
-def admin_inline_menu():
+def main_inline_menu():
     return {
         "inline_keyboard": [
             [
                 {
-                    "text": "🎁 Створити розіграш",
+                    "text": "🎁 Подати оголошення",
                     "callback_data": "create_giveaway",
                 }
             ],
             [
                 {
-                    "text": "📋 Активні розіграші",
+                    "text": "📢 Активні оголошення",
                     "callback_data": "active_giveaways",
-                }
-            ],
-            [
+                },
                 {
-                    "text": "🏆 Завершені",
-                    "callback_data": "finished_giveaways",
-                }
+                    "text": "🗂 Мої оголошення",
+                    "callback_data": "my_giveaways",
+                },
             ],
             [
                 {
@@ -683,61 +721,30 @@ def admin_inline_menu():
     }
 
 
-def participant_inline_menu():
-    return {
-        "inline_keyboard": [
-            [
-                {
-                    "text": "🎁 Активні розіграші",
-                    "callback_data": "participant_active",
-                }
-            ],
-            [
-                {
-                    "text": "ℹ️ Допомога",
-                    "callback_data": "participant_help",
-                }
-            ],
-        ]
-    }
-
-
 def persistent_keyboard(user_id):
-    if is_admin(user_id):
-        keyboard = [
-            ["🎁 Створити розіграш"],
-            ["📋 Активні розіграші", "🏆 Завершені"],
-            ["ℹ️ Допомога"],
-        ]
-    else:
-        keyboard = [
-            ["🎁 Активні розіграші"],
-            ["ℹ️ Допомога"],
-        ]
-
     return {
-        "keyboard": keyboard,
+        "keyboard": [
+            ["🎁 Подати оголошення"],
+            ["📢 Активні оголошення", "🗂 Мої оголошення"],
+            ["ℹ️ Допомога"],
+        ],
         "resize_keyboard": True,
         "is_persistent": True,
     }
 
 
 def show_main_menu(chat_id, user_id):
-    if is_admin(user_id):
-        text = (
-            "🎁 <b>RandomCoin Bot</b>\n"
-            "Панель керування розіграшами. Оберіть дію 👇"
-        )
-    else:
-        text = (
-            "🎁 <b>RandomCoin Bot</b>\n"
-            "Оберіть активний розіграш або відкрийте допомогу 👇"
-        )
-
-    # Одне компактне повідомлення + постійна нижня клавіатура.
     send_message(
         chat_id,
-        text,
+        "🎲 <b>RandomCoinUA Bot</b>\n\n"
+        "Створюй та проводь розіграші просто у Telegram.\n"
+        "Оберіть потрібну дію 👇",
+        main_inline_menu(),
+    )
+
+    send_message(
+        chat_id,
+        "⬇️ <b>Швидке меню</b>",
         persistent_keyboard(user_id),
     )
 
@@ -980,6 +987,7 @@ def build_preview(draft):
     return (
         "🎁 <b>ПЕРЕВІРКА РОЗІГРАШУ</b>\n"
         f"🏷 <b>Назва:</b> {esc(draft['title'])}\n"
+        f"👤 <b>Організатор:</b> {esc(draft.get('organizer_name') or '—')}\n"
         f"📝 <b>Опис:</b> {esc(draft['description'])}\n"
         f"📸 Фото: <b>{len(draft['photos'])}</b> | "
         f"🏆 Переможців: <b>{draft['winners']}</b>\n"
@@ -1001,6 +1009,7 @@ def build_public_text(giveaway_id, draft):
     return (
         "🎁 <b>НОВИЙ РОЗІГРАШ</b> 🎁\n"
         f"🆔 №{giveaway_id} | 🏷 <b>{esc(draft['title'])}</b>\n"
+        f"👤 <b>Організатор:</b> {esc(draft.get('organizer_name') or '—')}\n"
         f"📝 {esc(draft['description'])}\n"
         f"🏆 Переможців: <b>{draft['winners']}</b> | "
         f"🚀 Буст: <b>{boost_text}</b>\n"
@@ -1037,8 +1046,25 @@ def show_preview(chat_id, draft):
 # CREATE WIZARD
 # =========================================================
 
-def start_wizard(chat_id, user_id):
-    new_draft(user_id)
+def start_wizard(chat_id, user_id, user=None):
+    draft = new_draft(user_id)
+
+    if user:
+        organizer_name = (
+            ("@" + user["username"])
+            if user.get("username")
+            else " ".join(
+                x for x in (
+                    user.get("first_name"),
+                    user.get("last_name"),
+                )
+                if x
+            ).strip()
+        )
+    else:
+        organizer_name = ""
+
+    draft["organizer_name"] = organizer_name or f"ID {user_id}"
 
     send_message(
         chat_id,
@@ -1160,10 +1186,11 @@ def handle_draft_message(message, user_id, draft):
             )
             return
 
-        if target > 100000:
+        # Верхньої межі кількості учасників немає.
+        if target <= 0:
             send_message(
                 chat_id,
-                "⚠️ Максимум 100000 учасників.",
+                "⚠️ Введіть додатну кількість учасників.",
                 cancel_keyboard(),
             )
             return
@@ -1331,6 +1358,21 @@ def attempt_join(chat_id, user, giveaway_id):
     )
 
     if created:
+        notify_admin_usage(
+            user,
+            f"зареєструвався у розіграші #{giveaway_id}",
+        )
+
+        organizer_id = as_int(giveaway.get("created_by"))
+        if organizer_id and organizer_id != as_int(user.get("id")):
+            send_message(
+                organizer_id,
+                "👤 <b>НОВИЙ УЧАСНИК</b>\n\n"
+                f"🎁 #{giveaway_id} {esc(giveaway['title'])}\n"
+                f"👤 {user_label(user)}\n"
+                f"👥 Учасників зараз: <b>{count}</b>",
+            )
+
         send_message(
             chat_id,
             "🎉 <b>ВИ БЕРЕТЕ УЧАСТЬ!</b>\n\n"
@@ -1541,18 +1583,12 @@ def finish_giveaway(giveaway_id):
         for item in winners
     ]
 
-    mark_finished(
-        giveaway_id,
-        winners_json,
-    )
+    mark_finished(giveaway_id, winners_json)
 
     if winners:
         winners_text = "\n".join(
-            f"🏆 {index}. {winner_html(item)}"
-            for index, item in enumerate(
-                winners,
-                start=1,
-            )
+            f"🏆 {place} місце — {winner_html(item)}"
+            for place, item in enumerate(winners, start=1)
         )
     else:
         winners_text = "😔 Немає зареєстрованих учасників."
@@ -1561,14 +1597,13 @@ def finish_giveaway(giveaway_id):
         "🎊 <b>РОЗІГРАШ ЗАВЕРШЕНО!</b>\n"
         f"🎁 <b>{esc(giveaway['title'])}</b>\n"
         f"👥 Учасників: <b>{len(participants)}</b> | "
-        f"🏆 Переможців: <b>{len(winners)}</b>\n"
+        f"🏆 Переможців: <b>{len(winners)}</b>\n\n"
         "🥳 <b>ПЕРЕМОЖЦІ:</b>\n"
-        f"{winners_text}\n"
+        f"{winners_text}\n\n"
         "✨ Вітаємо переможців! Дякуємо всім за участь 🤝"
     )
 
     group_chat_id = as_int(RANDOM_PUBLISH_CHAT_ID)
-
     if group_chat_id:
         send_message(
             group_chat_id,
@@ -1576,15 +1611,35 @@ def finish_giveaway(giveaway_id):
             message_thread_id=thread_id(),
         )
 
-    admin_id = as_int(ADMIN_TELEGRAM_ID)
+    organizer_id = as_int(giveaway.get("created_by"))
+    if organizer_id:
+        send_message(
+            organizer_id,
+            "📣 <b>ВАШ РОЗІГРАШ ЗАВЕРШЕНО</b>\n\n" + final_text,
+        )
 
-    if admin_id:
+    for place, winner in enumerate(winners, start=1):
+        winner_id = as_int(winner.get("user_id"))
+        if not winner_id:
+            continue
+
+        send_message(
+            winner_id,
+            "🎉 <b>ВІТАЄМО! ВИ ПЕРЕМОЖЕЦЬ!</b>\n\n"
+            f"🎁 Розіграш: <b>{esc(giveaway['title'])}</b>\n"
+            f"🏆 Ваше призове місце: <b>{place}</b>\n\n"
+            "📩 Організатор отримав результати розіграшу.",
+        )
+
+    admin_id = as_int(ADMIN_TELEGRAM_ID)
+    if admin_id and admin_id != organizer_id:
         send_message(
             admin_id,
-            final_text,
+            "📊 <b>ЗАВЕРШЕНО РОЗІГРАШ КОРИСТУВАЧА</b>\n\n" + final_text,
         )
 
     return True
+
 
 
 # =========================================================
@@ -1643,73 +1698,105 @@ def ensure_started():
 # LISTS
 # =========================================================
 
-def show_active(chat_id, for_admin=False):
+def giveaway_manage_keyboard(giveaway_id):
+    return {
+        "inline_keyboard": [
+            [
+                {
+                    "text": "👥 Учасники",
+                    "callback_data": f"view_participants:{giveaway_id}",
+                },
+                {
+                    "text": "🏁 Завершити",
+                    "callback_data": f"owner_finish:{giveaway_id}",
+                },
+            ]
+        ]
+    }
+
+
+def show_active(chat_id, viewer_id=None):
     rows = active_giveaways()
+
+    if not rows:
+        send_message(chat_id, "📢 Активних оголошень поки немає.")
+        return
+
+    for giveaway in rows[:20]:
+        is_owner = (
+            viewer_id is not None
+            and int(giveaway["created_by"]) == int(viewer_id)
+        )
+
+        text = (
+            f"🎁 <b>#{giveaway['id']} {esc(giveaway['title'])}</b>\n\n"
+            f"👥 Учасників: <b>{giveaway['participants_count']}</b>\n"
+            f"🏆 Призових місць: <b>{giveaway['winners_count']}</b>\n"
+            f"🏁 Завершення: <b>{esc(db_end_text(giveaway))}</b>"
+        )
+
+        deep_link = (
+            f"https://t.me/{BOT_USERNAME}"
+            f"?start=giveaway_{giveaway['id']}"
+        )
+
+        rows_kb = [
+            [
+                {
+                    "text": "🎁 Взяти участь",
+                    "url": deep_link,
+                }
+            ]
+        ]
+
+        if is_owner:
+            rows_kb.append(giveaway_manage_keyboard(giveaway["id"])["inline_keyboard"][0])
+
+        send_message(
+            chat_id,
+            text,
+            {"inline_keyboard": rows_kb},
+        )
+
+
+def show_my_giveaways(chat_id, user_id):
+    rows = my_giveaways(user_id)
 
     if not rows:
         send_message(
             chat_id,
-            "🎁 Активних розіграшів поки немає.",
+            "🗂 <b>МОЇ ОГОЛОШЕННЯ</b>\n\n"
+            "Ти ще не створював розіграшів.",
         )
         return
 
-    for giveaway in rows[:20]:
+    send_message(chat_id, "🗂 <b>МОЇ ОГОЛОШЕННЯ</b>")
+
+    for giveaway in rows:
+        status = "🟢 Активний" if giveaway["status"] == "active" else "✅ Завершений"
+
         text = (
-            f"🎁 <b>#{giveaway['id']} {esc(giveaway['title'])}</b>\n\n"
+            f"🎁 <b>#{giveaway['id']} {esc(giveaway['title'])}</b>\n"
+            f"{status}\n"
             f"👥 Учасників: <b>{giveaway['participants_count']}</b>\n"
-            f"🏆 Переможців: <b>{giveaway['winners_count']}</b>\n"
+            f"🏆 Призових місць: <b>{giveaway['winners_count']}</b>\n"
             f"🏁 Завершення: <b>{esc(db_end_text(giveaway))}</b>"
         )
 
-        if for_admin:
-            markup = {
-                "inline_keyboard": [
-                    [
-                        {
-                            "text": "👥 Учасники",
-                            "callback_data": f"admin_participants:{giveaway['id']}",
-                        },
-                        {
-                            "text": "🏁 Завершити",
-                            "callback_data": f"admin_finish:{giveaway['id']}",
-                        },
-                    ]
-                ]
-            }
-            send_message(
-                chat_id,
-                text,
-                markup,
-            )
-        else:
-            deep_link = (
-                f"https://t.me/{BOT_USERNAME}"
-                f"?start=giveaway_{giveaway['id']}"
-            )
-            send_message(
-                chat_id,
-                text,
-                {
-                    "inline_keyboard": [
-                        [
-                            {
-                                "text": "🎁 Взяти участь",
-                                "url": deep_link,
-                            }
-                        ]
-                    ]
-                },
-            )
+        markup = (
+            giveaway_manage_keyboard(giveaway["id"])
+            if giveaway["status"] == "active"
+            else None
+        )
+
+        send_message(chat_id, text, markup)
 
 
 def show_finished(chat_id):
     rows = finished_giveaways()
 
     if not rows:
-        send_message(
-            chat_id,
-            "🏆 Завершених розіграшів поки немає.",
-        )
+        send_message(chat_id, "🏆 Завершених розіграшів поки немає.")
         return
 
     for giveaway in rows[:20]:
@@ -1781,7 +1868,7 @@ def show_status(chat_id):
 # =========================================================
 
 def handle_message(message):
-    # Бот у групах мовчить.
+    # Бот працює ТІЛЬКИ у приватному чаті з користувачем.
     if not is_private_message(message):
         return
 
@@ -1790,215 +1877,72 @@ def handle_message(message):
     user_id = user.get("id")
     text = (message.get("text") or "").strip()
 
-    # Deep-link з кнопки «Взяти участь».
     if text.startswith("/start giveaway_"):
         giveaway_id = as_int(
             text.split("giveaway_", 1)[1].split()[0],
             0,
         )
+        notify_admin_usage(user, f"відкрив розіграш #{giveaway_id}")
 
         if giveaway_id:
-            show_join_screen(
-                chat_id,
-                giveaway_id,
-            )
+            show_join_screen(chat_id, giveaway_id)
             return
 
-    if text in ("/start", "/menu"):
-        show_main_menu(
-            chat_id,
-            user_id,
-        )
+    if text == "/start":
+        notify_admin_usage(user, "запустив бота /start")
+        show_main_menu(chat_id, user_id)
         return
 
-    if text == "/ping":
-        send_message(
-            chat_id,
-            "🏓 <b>Pong!</b>\n🎁 RandomCoin Bot працює нормально ✅",
-        )
+    if text == "/menu":
+        notify_admin_usage(user, "відкрив меню")
+        show_main_menu(chat_id, user_id)
         return
 
-    if text in ("/giveaways", "🎁 Активні розіграші"):
-        show_active(
-            chat_id,
-            for_admin=is_admin(user_id),
-        )
+    if text in ("/create", "🎁 Подати оголошення"):
+        notify_admin_usage(user, "почав створювати розіграш")
+        start_wizard(chat_id, user_id, user)
+        return
+
+    if text in (
+        "/giveaways",
+        "📢 Активні оголошення",
+        "🎁 Активні розіграші",
+    ):
+        notify_admin_usage(user, "переглянув активні оголошення")
+        show_active(chat_id, viewer_id=user_id)
+        return
+
+    if text in ("/my", "🗂 Мої оголошення"):
+        notify_admin_usage(user, "відкрив свої оголошення")
+        show_my_giveaways(chat_id, user_id)
         return
 
     if text in ("/help", "ℹ️ Допомога"):
         send_message(
             chat_id,
-            "ℹ️ <b>RandomCoin Bot</b>\n\n"
-            "🎁 Створення та участь у розіграшах\n"
-            "📸 1–10 фото\n"
-            "🏆 1–15 переможців\n"
+            "ℹ️ <b>RandomCoinUA Bot</b>\n\n"
+            "🎁 Створення власних розіграшів\n"
+            "📸 Від 1 до 10 фото\n"
+            "🏆 Від 1 до 15 призових місць\n"
+            "👥 Кількість учасників — без верхньої межі\n"
             "📢 Перевірка Telegram-підписок\n"
-            "🚀 Адмін-керований буст ×2 / ×3\n"
-            "⏰ Завершення за часом\n"
-            "👥 Завершення за кількістю учасників\n"
-            "🏆 Випадковий вибір переможців",
+            "🚀 Додаткові шанси ×2 / ×3\n"
+            "⏰ Завершення за часом або кількістю учасників\n"
+            "🎲 Випадковий вибір унікальних переможців\n"
+            "📩 Автоматичне повідомлення організатора та переможців.",
         )
         return
 
-    # Далі службові дії доступні тільки власнику.
-    if text == "/create":
-        if is_admin(user_id):
-            start_wizard(chat_id, user_id)
-        else:
-            send_message(chat_id, "⛔ Недостатньо прав.")
-        return
-
-    if text == "/active":
-        if is_admin(user_id):
-            show_active(chat_id, for_admin=True)
-        else:
-            send_message(chat_id, "⛔ Недостатньо прав.")
-        return
-
-    if text == "/finished":
-        if is_admin(user_id):
-            show_finished(chat_id)
-        else:
-            send_message(chat_id, "⛔ Недостатньо прав.")
-        return
-
-    if text == "/status":
-        if is_admin(user_id):
-            show_status(chat_id)
-        else:
-            send_message(chat_id, "⛔ Недостатньо прав.")
-        return
-
-    if text.startswith("/participants"):
-        if not is_admin(user_id):
-            send_message(chat_id, "⛔ Недостатньо прав.")
-            return
-
-        parts = text.split()
-
-        if len(parts) != 2 or not parts[1].isdigit():
-            send_message(
-                chat_id,
-                "Використання:\n"
-                "<code>/participants GIVEAWAY_ID</code>",
-            )
-            return
-
-        show_participants_to_admin(
-            chat_id,
-            int(parts[1]),
-        )
-        return
-
-    if text.startswith("/boost"):
-        if not is_admin(user_id):
-            send_message(chat_id, "⛔ Недостатньо прав.")
-            return
-
-        parts = text.split()
-
-        if (
-            len(parts) != 3
-            or not parts[1].isdigit()
-            or not parts[2].isdigit()
-        ):
-            send_message(
-                chat_id,
-                "Використання:\n"
-                "<code>/boost GIVEAWAY_ID USER_ID</code>",
-            )
-            return
-
-        admin_grant_boost(
-            chat_id,
-            int(parts[1]),
-            int(parts[2]),
-        )
-        return
-
-    if text.startswith("/finish"):
-        if not is_admin(user_id):
-            send_message(chat_id, "⛔ Недостатньо прав.")
-            return
-
-        parts = text.split()
-
-        if len(parts) != 2 or not parts[1].isdigit():
-            send_message(
-                chat_id,
-                "Використання:\n"
-                "<code>/finish GIVEAWAY_ID</code>",
-            )
-            return
-
-        if finish_giveaway(int(parts[1])):
-            send_message(
-                chat_id,
-                "✅ Розіграш завершено.",
-            )
-        else:
-            send_message(
-                chat_id,
-                "⚠️ Активний розіграш не знайдено.",
-            )
-        return
-
-    if text == "/cancel":
-        if is_admin(user_id):
-            delete_draft(user_id)
-            send_message(
-                chat_id,
-                "❌ Створення розіграшу скасовано.",
-            )
-            show_main_menu(chat_id, user_id)
-        return
-
-    if text == "🎁 Створити розіграш":
-        if not is_admin(user_id):
-            send_message(
-                chat_id,
-                "⛔ Ця функція доступна тільки адміністратору.",
-            )
-            return
-
-        start_wizard(
-            chat_id,
+    draft = get_draft(user_id)
+    if draft:
+        handle_draft_message(
+            message,
             user_id,
+            draft,
         )
         return
 
-    if (
-        text == "📋 Активні розіграші"
-        and is_admin(user_id)
-    ):
-        show_active(
-            chat_id,
-            for_admin=True,
-        )
-        return
-
-    if (
-        text == "🏆 Завершені"
-        and is_admin(user_id)
-    ):
-        show_finished(chat_id)
-        return
-
-    if is_admin(user_id):
-        draft = get_draft(user_id)
-
-        if draft:
-            handle_draft_message(
-                message,
-                user_id,
-                draft,
-            )
-            return
-
-    show_main_menu(
-        chat_id,
-        user_id,
-    )
+    show_main_menu(chat_id, user_id)
 
 
 # =========================================================
@@ -2034,79 +1978,69 @@ def handle_callback(callback):
             )
         return
 
-    if data.startswith("admin_participants:"):
-        answer_callback(callback_id)
+    if data.startswith("view_participants:"):
+        giveaway_id = as_int(data.split(":", 1)[1], 0)
+        giveaway = get_giveaway(giveaway_id)
 
-        if not is_admin(user_id):
-            return
-
-        giveaway_id = as_int(
-            data.split(":", 1)[1],
-            0,
-        )
-
-        show_participants_to_admin(
-            chat_id,
-            giveaway_id,
-        )
-        return
-
-    if data.startswith("admin_finish:"):
-        if not is_admin(user_id):
+        if not giveaway or (
+            int(giveaway["created_by"]) != int(user_id)
+            and not is_admin(user_id)
+        ):
             answer_callback(
                 callback_id,
-                "⛔ Недостатньо прав.",
+                "⛔ Учасників може переглядати лише організатор.",
                 True,
             )
             return
 
-        giveaway_id = as_int(
-            data.split(":", 1)[1],
-            0,
-        )
+        answer_callback(callback_id)
+        show_participants_to_admin(chat_id, giveaway_id)
+        return
+
+    if data.startswith("owner_finish:"):
+        giveaway_id = as_int(data.split(":", 1)[1], 0)
+        giveaway = get_giveaway(giveaway_id)
+
+        if not giveaway or (
+            int(giveaway["created_by"]) != int(user_id)
+            and not is_admin(user_id)
+        ):
+            answer_callback(
+                callback_id,
+                "⛔ Завершити розіграш може лише організатор.",
+                True,
+            )
+            return
 
         answer_callback(callback_id)
 
         if finish_giveaway(giveaway_id):
-            send_message(
-                chat_id,
-                "✅ Розіграш завершено вручну.",
-            )
+            send_message(chat_id, "✅ Розіграш завершено вручну.")
         else:
-            send_message(
-                chat_id,
-                "⚠️ Активний розіграш не знайдено.",
-            )
+            send_message(chat_id, "⚠️ Активний розіграш не знайдено.")
         return
 
     if data == "create_giveaway":
-        if not is_admin(user_id):
-            answer_callback(
-                callback_id,
-                "⛔ Тільки адміністратор.",
-                True,
-            )
-            return
-
         answer_callback(callback_id)
-        start_wizard(chat_id, user_id)
+        notify_admin_usage(user, "почав створювати розіграш")
+        start_wizard(chat_id, user_id, user)
         return
 
     if data == "active_giveaways":
         answer_callback(callback_id)
-
-        if is_admin(user_id):
-            show_active(
-                chat_id,
-                for_admin=True,
-            )
+        notify_admin_usage(user, "переглянув активні оголошення")
+        show_active(chat_id, viewer_id=user_id)
         return
 
     if data == "finished_giveaways":
         answer_callback(callback_id)
+        show_finished(chat_id)
+        return
 
-        if is_admin(user_id):
-            show_finished(chat_id)
+    if data == "my_giveaways":
+        answer_callback(callback_id)
+        notify_admin_usage(user, "відкрив свої оголошення")
+        show_my_giveaways(chat_id, user_id)
         return
 
     if data == "participant_active":
@@ -2114,7 +2048,7 @@ def handle_callback(callback):
 
         show_active(
             chat_id,
-            for_admin=False,
+            viewer_id=user_id,
         )
         return
 
@@ -2133,25 +2067,15 @@ def handle_callback(callback):
 
     if data == "cancel_create":
         answer_callback(callback_id)
-
-        if is_admin(user_id):
-            delete_draft(user_id)
-            send_message(
-                chat_id,
-                "❌ Створення розіграшу скасовано.",
-            )
-            show_main_menu(chat_id, user_id)
-        return
-
-    # Далі тільки адміністратор.
-    if not is_admin(user_id):
-        answer_callback(
-            callback_id,
-            "⛔ Недостатньо прав.",
-            True,
+        delete_draft(user_id)
+        send_message(
+            chat_id,
+            "❌ Створення розіграшу скасовано.",
         )
+        show_main_menu(chat_id, user_id)
         return
 
+    # Далі — кроки майстра конкретного користувача.
     draft = get_draft(user_id)
 
     if not draft:
@@ -2178,7 +2102,7 @@ def handle_callback(callback):
             chat_id,
             f"✅ Отримано фото: <b>{len(draft['photos'])}</b>\n\n"
             "Крок 4 із 6\n\n"
-            "🏆 Оберіть кількість переможців від 1 до 15:",
+            "🏆 Оберіть кількість призових місць від 1 до 15:",
             winners_keyboard(),
         )
         return
@@ -2208,7 +2132,7 @@ def handle_callback(callback):
 
         send_message(
             chat_id,
-            f"✅ Переможців: <b>{winners}</b>\n\n"
+            f"✅ Призових місць: <b>{winners}</b>\n\n"
             "Крок 5 із 6\n\n"
             "🚀 Чи використовувати буст додаткових шансів?\n\n"
             "Буст зможеш надати конкретному учаснику сам.",
@@ -2273,7 +2197,7 @@ def handle_callback(callback):
 
     if data == "giveaway_restart":
         answer_callback(callback_id)
-        start_wizard(chat_id, user_id)
+        start_wizard(chat_id, user_id, user)
         return
 
     if data == "giveaway_publish":
@@ -2319,6 +2243,11 @@ def handle_callback(callback):
 
         launched = dict(draft)
         delete_draft(user_id)
+
+        notify_admin_usage(
+            user,
+            f"запустив розіграш #{giveaway_id}: {launched['title']}",
+        )
 
         send_message(
             chat_id,
